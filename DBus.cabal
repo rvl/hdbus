@@ -1,5 +1,5 @@
 name:           DBus
-version:        0.4
+version:        0.5
 license:        BSD3
 license-file:   LICENSE
 copyright:      Copyright (C) 2006 Evan Martin <martine@danga.com>
