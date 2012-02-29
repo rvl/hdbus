@@ -123,7 +123,7 @@ type Iter = Ptr IterTag
 
 data Arg = Byte Word8 | Boolean Bool | Int16 Int16 | Word16 Word16 | Int32 Int32 | Word32 Word32
          | Int64 Int64 | Word64 Word64 | Double Double | String String | ObjectPath {- ? -}
-         | TypeSignature {- ? -} | Array String [Arg] | Variant Arg | Struct {- ? -} | DictEntry Arg Arg
+         | TypeSignature {- ? -} | Array String [Arg] | Variant Arg | Struct [Arg] | DictEntry Arg Arg
          | ByteString B.ByteString | Invalid
            deriving (Show,Read,Typeable)
 
@@ -140,6 +140,7 @@ signature ByteString{} = signature (Array (signature (Byte 0)) [])
 signature (DictEntry argA argB) = "{"++signature argA ++ signature argB ++ "}"
 signature Variant{} = #{const_str DBUS_TYPE_VARIANT_AS_STRING}
 signature String{} = #{const_str DBUS_TYPE_STRING_AS_STRING}
+signature (Struct args) = "{" ++ concatMap signature args ++ "}"
 signature arg = error $ "DBus.Message.signature: " ++ show arg
 
 decodeArgs iter
@@ -159,6 +160,7 @@ decodeArg iter
            #{const DBUS_TYPE_ARRAY}  -> decodeArray iter
            #{const DBUS_TYPE_BOOLEAN}-> fmap Boolean getBasic
            #{const DBUS_TYPE_INVALID}-> return Invalid
+           #{const DBUS_TYPE_STRUCT} -> decodeStruct iter
            _ -> error $ "Unknown argument type: " ++ show arg_type ++ " ("++show (chr arg_type)++")"
     where getBasic :: Storable a => IO a
           getBasic = alloca $ \ptr -> do
@@ -194,6 +196,14 @@ decodeByteArray iter
          fptr <- newForeignPtr_ byte_ptr
          return $ ByteString $ B.fromForeignPtr fptr 0 (fromIntegral len)
 
+decodeStruct iter
+    = withIter $ \sub ->
+      do message_iter_recurse iter sub
+         let fetch = do arg <- decodeArg sub
+                        has_next <- message_iter_next sub
+                        if has_next then fmap (arg:) fetch
+                                    else return [arg]
+         fmap Struct fetch
 
 encodeArg iter arg
     = case arg of

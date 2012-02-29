@@ -1,5 +1,5 @@
 name:           DBus
-version:        0.3
+version:        0.4
 license:        BSD3
 license-file:   LICENSE
 copyright:      Copyright (C) 2006 Evan Martin <martine@danga.com>
@@ -17,5 +17,5 @@ extensions:     ForeignFunctionInterface, OverlappingInstances,
                 ExistentialQuantification
 exposed-modules: DBus, DBus.Message, DBus.Connection
 other-modules:   DBus.Internal, DBus.Shared
-extra-source-files: configure configure.ac
+extra-source-files: configure configure.ac DBus.buildinfo.in
 extra-tmp-files: autom4te.cache config.log config.status DBus.buildinfo
