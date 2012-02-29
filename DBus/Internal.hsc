@@ -9,7 +9,7 @@
 
 module DBus.Internal where
 
-import Control.Exception (throwDyn)
+import Control.OldException (throwDyn)
 import Control.Monad (when)
 import DBus (Error(..))
 import Foreign
