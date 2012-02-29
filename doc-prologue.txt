@@ -1,0 +1,12 @@
+See the HDBus home page (<http://neugierig.org/software/hdbus/>) for details.
+
+This documentation assumes you already know how the D-Bus API works.
+
+* See the D-Bus wiki
+  (<http://www.freedesktop.org/wiki/Software/dbus>) for an overview.
+
+* See the D-Bus low-level API tutorial
+  (<http://www.matthew.ath.cx/misc/dbus>) for more detail.
+
+* See the D-Bus API reference
+ (<http://dbus.freedesktop.org/doc/api/html/>) for per-function documentation.
