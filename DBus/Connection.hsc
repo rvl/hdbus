@@ -8,7 +8,7 @@ module DBus.Connection (
   -- * Connection Basics
   Connection,
   BusType(..),
-  busGet,
+  busGet, busConnectionUnref,
   send, sendWithReplyAndBlock,
   flush, close,
   withConnection,
@@ -32,15 +32,25 @@ import DBus.Shared
 
 type Connection = ForeignPtr ConnectionTag
 
-data BusType = Session -- ^The login session bus.
-             | System  -- ^The systemwide bus.
+-- |Multiple buses may be active simultaneously on a single system.
+--  The BusType indicates which one to use.
+data BusType = Session -- ^The session bus is restricted to the user's current
+                       --  GNOME session.
+             | System  -- ^This bus is system-wide.
              | Starter -- ^The bus that started us, if any.
 
 foreign import ccall unsafe "&dbus_connection_unref"
   connection_unref :: FunPtr (ConnectionP -> IO ())
+
 connectionPTOConnection conn = do
   when (conn == nullPtr) $ fail "null connection"
   newForeignPtr connection_unref conn
+
+-- |Force the dereference of a connection. Note that this is usually not
+-- necessary since the connections are garbage collected automatically.
+busConnectionUnref :: Connection -> IO ()
+busConnectionUnref = finalizeForeignPtr
+
 
 foreign import ccall unsafe "dbus_bus_get"
   bus_get :: CInt -> ErrorP -> IO ConnectionP
@@ -67,6 +77,7 @@ busRequestName conn name flags =
 
 -- |Close a connection.  A connection must be closed before its last
 -- reference disappears.
+-- You may not close a connection created with @busGet@.
 foreign import ccall unsafe "dbus_connection_close"
   connection_close :: ConnectionP -> IO ()
 close :: Connection -> IO ()
@@ -75,7 +86,7 @@ close conn = withForeignPtr conn connection_close
 -- |Open a connection and run an IO action, ensuring it is properly closed when
 -- you're done.
 withConnection :: BusType -> (Connection -> IO a) -> IO a
-withConnection bt = bracket (busGet bt) close
+withConnection bt = bracket (busGet bt) busConnectionUnref
 
 foreign import ccall unsafe "dbus_connection_send"
   connection_send :: ConnectionP -> MessageP -> Ptr Word32 -> IO Bool

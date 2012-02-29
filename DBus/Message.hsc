@@ -1,4 +1,5 @@
-{-# LANGUAGE ScopedTypeVariables, FlexibleInstances, TypeSynonymInstances #-}
+{-# LANGUAGE PatternSignatures, TypeSynonymInstances, FlexibleInstances #-}
+{-# OPTIONS -fglasgow-exts #-}
 -- HDBus -- Haskell bindings for D-Bus.
 -- Copyright (C) 2006 Evan Martin <martine@danga.com>
 
@@ -16,6 +17,9 @@ module DBus.Message (
   getDestination, getSender,
 
   -- * Arguments
+  Arg(..), args, addArgs,
+  signature, stringSig, variantSig
+{-
   Arg(..),
   args, addArgs,
   -- ** Dictionaries
@@ -26,18 +30,24 @@ module DBus.Message (
   -- | Some D-Bus functions allow variants, which are similar to
   -- 'Data.Dynamic' dynamics but restricted to D-Bus data types.
   Variant, variant
+-}
 ) where
 
 import Control.Monad (when)
 import Data.Int
 import Data.Word
+import Data.Char
 import Data.Dynamic
 import Foreign
 import Foreign.C.String
 import Foreign.C.Types (CInt)
+import System.IO.Unsafe
 
 import DBus.Internal
 import DBus.Shared
+
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Internal as B
 
 type Message = ForeignPtr MessageTag
 
@@ -110,6 +120,106 @@ getSignature msg =
 type IterTag = ()
 type Iter = Ptr IterTag
 
+
+data Arg = Byte Word8 | Boolean Bool | Int16 Int16 | Word16 Word16 | Int32 Int32 | Word32 Word32
+         | Int64 Int64 | Word64 Word64 | Double Double | String String | ObjectPath {- ? -}
+         | TypeSignature {- ? -} | Array String [Arg] | Variant Arg | Struct {- ? -} | DictEntry Arg Arg
+         | ByteString B.ByteString | Invalid
+           deriving (Show,Read,Typeable)
+
+stringSig :: String
+stringSig = signature String{}
+
+variantSig = signature Variant{}
+
+signature Byte{} = #{const_str DBUS_TYPE_BYTE_AS_STRING}
+signature Boolean{} = #{const_str DBUS_TYPE_BOOLEAN_AS_STRING}
+signature Int32{} = #{const_str DBUS_TYPE_INT32_AS_STRING}
+signature (Array sig _) = #{const_str DBUS_TYPE_ARRAY_AS_STRING} ++ sig
+signature ByteString{} = signature (Array (signature (Byte 0)) [])
+signature (DictEntry argA argB) = "{"++signature argA ++ signature argB ++ "}"
+signature Variant{} = #{const_str DBUS_TYPE_VARIANT_AS_STRING}
+signature String{} = #{const_str DBUS_TYPE_STRING_AS_STRING}
+signature arg = error $ "DBus.Message.signature: " ++ show arg
+
+decodeArgs iter
+    = let loop = unsafeInterleaveIO $
+                 do arg <- decodeArg iter
+                    has_next <- message_iter_next iter
+                    if has_next then fmap (arg:) loop
+                                else return [arg]
+      in loop
+
+decodeArg iter
+    = do arg_type <- message_iter_get_arg_type iter
+         case arg_type of
+           #{const DBUS_TYPE_INT32}  -> fmap Int32 getBasic
+           #{const DBUS_TYPE_UINT32} -> fmap Word32 getBasic
+           #{const DBUS_TYPE_STRING} -> fmap String (getBasic >>= peekCString)
+           #{const DBUS_TYPE_ARRAY}  -> decodeArray iter
+           #{const DBUS_TYPE_BOOLEAN}-> fmap Boolean getBasic
+           #{const DBUS_TYPE_INVALID}-> return Invalid
+           _ -> error $ "Unknown argument type: " ++ show arg_type ++ " ("++show (chr arg_type)++")"
+    where getBasic :: Storable a => IO a
+          getBasic = alloca $ \ptr -> do
+                       message_iter_get_basic iter ptr
+                       peek ptr
+
+decodeArray iter
+    = withIter $ \sub ->
+      do message_iter_recurse iter sub
+         len <- message_iter_get_array_len iter
+         elt_type <- message_iter_get_element_type iter
+         case elt_type of
+           #{const DBUS_TYPE_BYTE} -> if len > 0 then decodeByteArray iter
+                                                 else return $ ByteString B.empty
+           _other -> withIter $ \sub ->
+                     do message_iter_recurse iter sub
+                        sig <- getIterSignature sub
+                        lst <- if len > 0 then getArray sub else return []
+                        return $ Array sig lst
+    where getArray sub = do x <- decodeArg sub
+                            has_next <- message_iter_next sub
+                            if has_next
+                              then do xs <- getArray sub
+                                      return (x:xs)
+                              else return [x]
+
+decodeByteArray iter
+    = alloca $ \elts_ptr ->
+      alloca $ \n_ptr ->
+      do message_iter_get_fixed_array iter elts_ptr n_ptr
+         byte_ptr <- peek elts_ptr
+         len <- peek n_ptr
+         fptr <- newForeignPtr_ byte_ptr
+         return $ ByteString $ B.fromForeignPtr fptr 0 (fromIntegral len)
+
+
+encodeArg iter arg
+    = case arg of
+        Int32 i32  -> putSimple #{const DBUS_TYPE_INT32} i32
+        Word32 u32 -> putSimple #{const DBUS_TYPE_UINT32} u32
+        String str -> withCString str $ \cstr -> putSimple #{const DBUS_TYPE_STRING} cstr
+        Array sig lst -> encodeArray iter sig lst
+        DictEntry argA argB -> encodeDict iter argA argB
+        _ -> error $ "Can't encode argument: " ++ show arg
+    where putSimple ty val = with val $ putBasic iter ty
+
+encodeArray iter sig lst
+    = withCString sig $ \csig ->
+        withContainer iter #{const DBUS_TYPE_ARRAY} csig $ \sub ->
+          mapM_ (encodeArg sub) lst
+
+encodeDict iter argA argB
+    = withContainer iter #{const DBUS_TYPE_DICT_ENTRY} nullPtr $ \sub ->
+      do message_iter_recurse iter sub
+         encodeArg sub argA
+         encodeArg sub argB
+
+
+
+
+{-
 class Show a => Arg a where
   toIter :: a -> Iter -> IO ()
   fromIter :: Iter -> IO a
@@ -126,14 +236,15 @@ assertArgType iter expected_type = do
   when (arg_type /= expected_type) $
     fail $ "Expected arg type " ++ show expected_type ++
            " but got " ++ show arg_type
-
+-}
 putBasic iter typ val = catchOom (message_iter_append_basic iter typ val)
+
 withContainer iter typ sig f =
   withIter $ \sub -> do
     catchOom $ (message_iter_open_container iter typ sig sub)
     f sub
     catchOom $ (message_iter_close_container iter sub)
-
+{-
 instance Arg () where
   toIter _ _ = return ()
   fromIter _ = return ()
@@ -217,8 +328,8 @@ instance Arg a => Arg [a] where
           mapM_ (\v -> toIter v sub) arg
   signature a = "a" ++ signature (undefined :: a)
 
--- instance (Show a,Show b,Show c,Show d,Show e,Show f,Show g,Show h) => Show (a,b,c,d,e,f,g,h) where
---   show _ = "[show not implemented]"
+--instance (Show a,Show b,Show c,Show d,Show e,Show f,Show g,Show h) => Show (a,b,c,d,e,f,g,h) where
+--  show _ = "[show not implemented]"
 
 newtype DictEntry a b = DictEntry (a,b)
 instance (Show a, Show b) => Show (DictEntry a b) where
@@ -354,7 +465,7 @@ instance Arg [Dynamic] where
           loop xs iter
     in loop list iter
   signature _ = "d"
-
+-}
 foreign import ccall unsafe "dbus_message_iter_init"
   message_iter_init :: MessageP -> Iter -> IO Bool
 foreign import ccall unsafe "dbus_message_iter_init_append"
@@ -363,6 +474,10 @@ foreign import ccall unsafe "dbus_message_iter_get_arg_type"
   message_iter_get_arg_type :: Iter -> IO Int
 foreign import ccall unsafe "dbus_message_iter_get_element_type"
   message_iter_get_element_type :: Iter -> IO Int
+foreign import ccall unsafe "dbus_message_iter_get_fixed_array"
+  message_iter_get_fixed_array :: Iter -> Ptr a -> Ptr CInt -> IO ()
+foreign import ccall unsafe "dbus_message_iter_get_signature"
+  message_iter_get_signature :: Iter -> IO CString
 foreign import ccall unsafe "dbus_message_iter_get_basic"
   message_iter_get_basic :: Iter -> Ptr a -> IO ()
 foreign import ccall unsafe "dbus_message_iter_get_array_len"
@@ -378,21 +493,25 @@ foreign import ccall unsafe "dbus_message_iter_open_container"
 foreign import ccall unsafe "dbus_message_iter_close_container"
   message_iter_close_container :: Iter -> Iter -> IO Bool
 
+getIterSignature :: Iter -> IO String
+getIterSignature iter = message_iter_get_signature iter >>= peekCString
+
 withIter = allocaBytes #{size DBusMessageIter}
 
 -- |Retrieve the arguments from a message.
-args :: (Arg a) => Message -> IO a
-args msg =
+args :: Message -> [Arg]
+args msg = unsafePerformIO $
   withForeignPtr msg $ \msg -> do
     withIter $ \iter -> do
       has_args <- message_iter_init msg iter
-      fromIter iter
+      if has_args then decodeArgs iter
+                  else return []
 
 -- |Add arguments to a message.
-addArgs :: (Arg a) => Message -> a -> IO ()
-addArgs msg arg =
+addArgs :: Message -> [Arg] -> IO ()
+addArgs msg args =
   withForeignPtr msg $ \msg ->
     allocInit #{size DBusMessageIter} (message_iter_init_append msg) $ \iter ->
-      toIterInternal arg iter
+      mapM_ (encodeArg iter) args
 
 -- vim: set ts=2 sw=2 tw=72 et ft=haskell :
