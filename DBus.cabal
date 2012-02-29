@@ -1,11 +1,12 @@
 name:           DBus
-version:        0.2
+version:        0.3
 license:        BSD3
 license-file:   LICENSE
 copyright:      Copyright (C) 2006 Evan Martin <martine@danga.com>
                 2008 David Himmelstrup <lemmih@gmail.com>
 author:         Evan Martin <martine@danga.com>, David Himmelstrup <lemmih@gmail.com>
-homepage:       http://neugierig.org/software/hdbus
+maintainer:     David Himmelstrup
+homepage:       http://seize.it/mirror/hdbus
 synopsis:       DBus bindings
 description:    Bindings for the D-Bus API.
   For details on D-Bus, see the D-Bus wiki at:
