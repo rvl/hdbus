@@ -510,7 +510,7 @@ withIter = allocaBytes #{size DBusMessageIter}
 
 -- |Retrieve the arguments from a message.
 args :: Message -> [Arg]
-args msg = unsafePerformIO $
+args msg = Foreign.unsafePerformIO $
   withForeignPtr msg $ \msg -> do
     withIter $ \iter -> do
       has_args <- message_iter_init msg iter
